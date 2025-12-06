@@ -1,20 +1,36 @@
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, skip
+
+# Import unsloth first for optimizations
+import unsloth
+from unsloth import FastLanguageModel
 
 import torch
 from datasets import Dataset
 from transformers import TrainingArguments, DataCollatorForLanguageModeling
 from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_callback import TrainerCallback
+from tqdm.auto import tqdm
 
-# Unsloth imports for faster training
-from unsloth import FastLanguageModel
 from trl import SFTTrainer
 
-# Wandb for experiment tracking
 import wandb
+
+# Import evaluator functions
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+from evals.evaluator import extract_answer
 
 
 @dataclass
@@ -27,8 +43,13 @@ class SFTConfig:
     
     # Data settings
     train_data_path: str = "data/train_mul_direct.jsonl"
-    val_data_path: Optional[str] = None
+    val_data_path: Optional[str] = None  # For validation loss - should have messages format
     max_seq_length: int = 512
+    
+    # Math evaluation settings (separate from validation loss)
+    math_eval_jsonl_path: Optional[str] = "evals/mul_eval_small.jsonl"  # For accuracy evaluation
+    math_eval_max_new_tokens: int = 256
+    math_eval_run_every_epoch: bool = True
     
     # Training settings
     num_epochs: int = 3
@@ -41,8 +62,8 @@ class SFTConfig:
     lr_scheduler_type: str = "cosine"
     
     # Optimization
-    fp16: bool = True
-    bf16: bool = False
+    fp16: bool = False
+    bf16: bool = True
     gradient_checkpointing: bool = True
     
     # Logging and saving
@@ -92,11 +113,29 @@ def prepare_dataset(
     
     SFTTrainer handles tokenization internally, so we just need to format
     the messages into text using the chat template.
+    
+    Handles two formats:
+    1. Training format: {"messages": [...]}
+    2. Eval format: {"prompt": "...", "answer": ...} - converts to messages format
     """
     data = load_jsonl_dataset(data_path)
     
+    # Convert eval format to messages format if needed
+    converted_data = []
+    for ex in data:
+        if "messages" in ex:
+            # Already in training format
+            converted_data.append(ex)
+        elif "prompt" in ex:
+            # Convert eval format to messages format (user only, no assistant response)
+            # For validation, we'll just use the prompt without answer
+            converted_data.append({
+                "messages": [{"role": "user", "content": ex["prompt"]}]
+            })
+        else:
+            raise ValueError(f"Unknown data format in {data_path}")
+    
     def format_function(examples):
-        # Extract messages and apply chat template to create text
         messages = examples["messages"]
         text = tokenizer.apply_chat_template(
             messages,
@@ -105,10 +144,8 @@ def prepare_dataset(
         )
         return {"text": text}
     
-    # Convert to HuggingFace Dataset
-    dataset = Dataset.from_list(data)
+    dataset = Dataset.from_list(converted_data)
     
-    # Format messages into text (SFTTrainer will tokenize)
     formatted_dataset = dataset.map(
         format_function,
         batched=False,
@@ -117,6 +154,256 @@ def prepare_dataset(
     
     return formatted_dataset
 
+
+def eval_model_with_current_model(model, tokenizer, jsonl_path: str, max_new_tokens: int = 256, verbose: bool = False):
+    """Evaluate model on dataset using the provided model and tokenizer (for training callbacks)."""
+    correct = 0
+    total = 0
+    
+    model.eval()
+    device = next(model.parameters()).device
+    
+    with open(jsonl_path, "r") as f:
+        lines = f.readlines()
+    
+    print(f"Evaluating on {len(lines)} examples from {jsonl_path}")
+    
+    for idx, line in enumerate(tqdm(lines, desc="Math evaluation", leave=False)):
+        try:
+            ex = json.loads(line)
+            prompt = ex["prompt"]
+            gold = ex["answer"]
+
+            messages = [{"role": "user", "content": prompt}]
+            inputs = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to(device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    temperature=0.0,
+                )
+            
+            gen = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
+            pred = extract_answer(gen)
+            is_correct = pred is not None and pred == gold
+            if is_correct:
+                correct += 1
+            total += 1
+            
+            # Log individual examples if verbose
+            if verbose and (idx < 3 or not is_correct):  # Show first 3 or any incorrect
+                status = "✓" if is_correct else "✗"
+                print(f"  {status} Example {idx+1}: pred={pred}, gold={gold}, correct={is_correct}")
+                if not is_correct and idx < 10:  # Show prediction for first few wrong ones
+                    print(f"    Generated: {gen[:200]}...")
+        except Exception as e:
+            print(f"Error evaluating example {idx+1}: {e}")
+            total += 1
+    
+    model.train()  # Set back to training mode
+    return {"right": correct, "total": total}
+
+
+class MathEvalCallback(TrainerCallback):
+    """Callback to run math evaluation after each epoch and at training start."""
+    
+    def __init__(self, config: SFTConfig):
+        self.config = config
+        self.eval_jsonl_path = config.math_eval_jsonl_path
+        self.max_new_tokens = config.math_eval_max_new_tokens
+        self._initial_eval_done = False  # Track if initial eval has been done
+        self._cached_model = None  # Cache model reference
+        self._cached_tokenizer = None  # Cache tokenizer reference
+        
+    def _run_math_eval(self, model, tokenizer, epoch=None):
+        """Helper method to run math evaluation."""
+        # Check if we should run evaluation
+        if not self.eval_jsonl_path:
+            return
+            
+        # Check if eval dataset exists
+        if not os.path.exists(self.eval_jsonl_path):
+            print(f"Warning: Math eval dataset not found at {self.eval_jsonl_path}, skipping...")
+            return
+        
+        # Get model and tokenizer if not provided
+        if model is None or tokenizer is None:
+            if hasattr(self, 'trainer'):
+                # Get model (unwrap if needed for DDP/DataParallel)
+                if model is None:
+                    if hasattr(self.trainer, 'model'):
+                        trainer_model = self.trainer.model
+                        # Unwrap if wrapped (e.g., by DataParallel, DDP, etc.)
+                        if hasattr(trainer_model, 'module'):
+                            model = trainer_model.module
+                        elif hasattr(self.trainer, 'accelerator') and hasattr(self.trainer.accelerator, 'unwrap_model'):
+                            model = self.trainer.accelerator.unwrap_model(trainer_model)
+                        else:
+                            model = trainer_model
+                
+                # Get tokenizer
+                if tokenizer is None:
+                    if hasattr(self.trainer, 'tokenizer'):
+                        tokenizer = self.trainer.tokenizer
+                    elif hasattr(self.trainer, 'processing_class'):
+                        tokenizer = self.trainer.processing_class
+        
+        if model is None or tokenizer is None:
+            print("Warning: Model or tokenizer not available for math evaluation, skipping...")
+            return
+            
+        epoch_label = f"epoch {int(epoch)}" if epoch is not None else "start"
+        model_name = getattr(self.config, 'model_name', 'unknown')
+        
+        # Log what's being evaluated
+        eval_source = "unknown"
+        if model is not None:
+            if hasattr(model, 'config') and hasattr(model.config, 'name_or_path'):
+                eval_source = f"checkpoint: {model.config.name_or_path}"
+            elif hasattr(model, '__class__'):
+                eval_source = f"model: {model.__class__.__name__}"
+            else:
+                eval_source = "training checkpoint"
+        
+        print(f"\n{'='*60}")
+        print(f"Running math evaluation at {epoch_label}")
+        print(f"Evaluating: {eval_source}")
+        print(f"Base model: {model_name}")
+        print(f"Dataset: {self.eval_jsonl_path}")
+        print(f"{'='*60}")
+        
+        try:
+            # Run evaluation with current training model
+            eval_result = eval_model_with_current_model(
+                model=model,
+                tokenizer=tokenizer,
+                jsonl_path=self.eval_jsonl_path,
+                max_new_tokens=self.max_new_tokens,
+                verbose=False  # Set to True for detailed per-example logging
+            )
+            
+            # Extract accuracy
+            accuracy = eval_result.get("right", 0) / eval_result.get("total", 1) if eval_result.get("total", 0) > 0 else 0.0
+            
+            # Log to wandb if enabled
+            if "wandb" in self.config.report_to.split(","):
+                log_dict = {
+                    "math_eval/accuracy": accuracy,
+                    "math_eval/correct": eval_result.get("right", 0),
+                    "math_eval/total": eval_result.get("total", 0),
+                }
+                if epoch is not None:
+                    log_dict["epoch"] = int(epoch)
+                wandb.log(log_dict)
+            
+            print(f"Math Eval Results - {epoch_label.capitalize()}: {eval_result.get('right', 0)}/{eval_result.get('total', 0)} = {accuracy:.3f}")
+            print(f"{'='*60}\n")
+            
+        except Exception as e:
+            print(f"Error during math evaluation: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_train_begin(self, args, state, control, model=None, tokenizer=None, **kwargs):
+        """Run math evaluation at the start of training."""
+        # Try to get model and tokenizer from trainer
+        if model is None and hasattr(self, 'trainer') and hasattr(self.trainer, 'model'):
+            model = self.trainer.model
+        if tokenizer is None and hasattr(self, 'trainer') and hasattr(self.trainer, 'tokenizer'):
+            tokenizer = self.trainer.tokenizer
+            
+        # Also check kwargs
+        if model is None:
+            model = kwargs.get('model')
+        if tokenizer is None:
+            tokenizer = kwargs.get('tokenizer')
+        
+        # Only run if we have model and tokenizer and haven't run initial eval yet
+        if model is not None and tokenizer is not None and not self._initial_eval_done:
+            self._run_math_eval(model, tokenizer, epoch=None)
+            self._initial_eval_done = True
+        
+    def on_epoch_end(self, args, state, control, model=None, tokenizer=None, **kwargs):
+        """Run math evaluation at the end of each epoch."""
+        # Only run if enabled
+        if not self.config.math_eval_run_every_epoch:
+            return
+        
+        # PRIORITY 1: Get model and tokenizer from trainer - this is the CURRENT training checkpoint
+        # The trainer should be set by the Trainer when callbacks are added
+        # This is what we want - the model with updated weights from training
+        if hasattr(self, 'trainer') and self.trainer is not None:
+            # Try to get unwrapped model (handles DDP/DataParallel wrapping)
+            if model is None:
+                if hasattr(self.trainer, 'model') and self.trainer.model is not None:
+                    trainer_model = self.trainer.model
+                    # Unwrap if wrapped (e.g., by DataParallel, DDP, etc.)
+                    if hasattr(trainer_model, 'module'):
+                        model = trainer_model.module
+                    elif hasattr(self.trainer, 'accelerator') and self.trainer.accelerator is not None:
+                        try:
+                            model = self.trainer.accelerator.unwrap_model(trainer_model)
+                        except:
+                            model = trainer_model
+                    else:
+                        model = trainer_model
+            
+            # Get tokenizer from trainer
+            if tokenizer is None:
+                if hasattr(self.trainer, 'tokenizer') and self.trainer.tokenizer is not None:
+                    tokenizer = self.trainer.tokenizer
+                elif hasattr(self.trainer, 'processing_class') and self.trainer.processing_class is not None:
+                    tokenizer = self.trainer.processing_class
+        
+        # PRIORITY 2: Try kwargs (if passed by Trainer)
+        if model is None:
+            model = kwargs.get('model')
+        if tokenizer is None:
+            tokenizer = kwargs.get('tokenizer')
+        
+        # Debug: Print what we have before calling _run_math_eval
+        if model is None or tokenizer is None:
+            debug_info = []
+            debug_info.append(f"model from args: {model is not None}")
+            debug_info.append(f"tokenizer from args: {tokenizer is not None}")
+            debug_info.append(f"has trainer attr: {hasattr(self, 'trainer')}")
+            
+            if hasattr(self, 'trainer'):
+                debug_info.append(f"trainer is not None: {self.trainer is not None}")
+                if self.trainer is not None:
+                    debug_info.append(f"has trainer.model: {hasattr(self.trainer, 'model')}")
+                    debug_info.append(f"has trainer.tokenizer: {hasattr(self.trainer, 'tokenizer')}")
+                    debug_info.append(f"has trainer.processing_class: {hasattr(self.trainer, 'processing_class')}")
+                    if hasattr(self.trainer, 'model'):
+                        debug_info.append(f"trainer.model is not None: {self.trainer.model is not None}")
+                        if self.trainer.model is not None:
+                            debug_info.append(f"trainer.model type: {type(self.trainer.model)}")
+                    if hasattr(self.trainer, 'tokenizer'):
+                        debug_info.append(f"trainer.tokenizer is not None: {self.trainer.tokenizer is not None}")
+                    if hasattr(self.trainer, 'processing_class'):
+                        debug_info.append(f"trainer.processing_class is not None: {self.trainer.processing_class is not None}")
+                else:
+                    debug_info.append("trainer is None!")
+            else:
+                debug_info.append("No trainer attribute!")
+            
+            print(f"DEBUG on_epoch_end: {'; '.join(debug_info)}")
+            print(f"DEBUG kwargs keys: {list(kwargs.keys())}")
+        
+        # We MUST use the trainer's model (current checkpoint) - do not use cached model
+        # The cached model is from BEFORE training and would give incorrect results
+        
+        # Run evaluation - _run_math_eval will also try to get them from trainer
+        self._run_math_eval(model, tokenizer, epoch=state.epoch)
+            
 
 def train_sft(config: SFTConfig):
     """Main training function for SFT using Unsloth for faster training."""
@@ -140,7 +427,6 @@ def train_sft(config: SFTConfig):
             },
         )
     
-    # Load model and tokenizer with Unsloth (much faster!)
     print(f"Loading model and tokenizer from {config.model_name} using Unsloth")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=config.model_name,
@@ -153,12 +439,10 @@ def train_sft(config: SFTConfig):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Enable gradient checkpointing if requested
     if config.gradient_checkpointing:
         model.enable_input_require_grads()
         model.gradient_checkpointing_enable()
     
-    # Optionally use LoRA for even faster training and lower memory
     if config.use_lora:
         print(f"Using LoRA with r={config.lora_r}, alpha={config.lora_alpha}")
         model = FastLanguageModel.get_peft_model(
@@ -173,7 +457,6 @@ def train_sft(config: SFTConfig):
             random_state=config.seed,
         )
     
-    # Prepare datasets
     print(f"Loading training data from {config.train_data_path}")
     train_dataset = prepare_dataset(
         config.train_data_path,
@@ -190,11 +473,9 @@ def train_sft(config: SFTConfig):
             max_length=config.max_seq_length,
         )
     
-    # Datasets are already formatted with "text" field from prepare_dataset
     train_dataset_text = train_dataset
     eval_dataset_text = eval_dataset
     
-    # Training arguments
     training_args = TrainingArguments(
         output_dir=config.output_dir,
         num_train_epochs=config.num_epochs,
@@ -211,7 +492,7 @@ def train_sft(config: SFTConfig):
         save_steps=config.save_steps,
         eval_steps=config.eval_steps,
         save_total_limit=config.save_total_limit,
-        evaluation_strategy="steps" if eval_dataset_text is not None else "no",
+        eval_strategy="epoch" if eval_dataset_text is not None else "no",
         save_strategy="steps",
         load_best_model_at_end=True if eval_dataset_text is not None else False,
         metric_for_best_model="loss" if eval_dataset_text is not None else None,
@@ -222,7 +503,12 @@ def train_sft(config: SFTConfig):
         remove_unused_columns=config.remove_unused_columns,
     )
     
-    # Initialize SFTTrainer (from TRL, works great with Unsloth)
+    # Prepare callbacks
+    callbacks = []
+    if config.math_eval_run_every_epoch and config.math_eval_jsonl_path:
+        math_eval_callback = MathEvalCallback(config=config)
+        callbacks.append(math_eval_callback)
+    
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -231,9 +517,23 @@ def train_sft(config: SFTConfig):
         dataset_text_field="text",
         max_seq_length=config.max_seq_length,
         args=training_args,
+        callbacks=callbacks,
     )
     
-    # Check for checkpoint
+    # Run initial math evaluation before training starts (if callback is enabled)
+    if config.math_eval_run_every_epoch and config.math_eval_jsonl_path:
+        for callback in callbacks:
+            if isinstance(callback, MathEvalCallback):
+                print("\nRunning initial math evaluation before training...")
+                # Store trainer reference - this is crucial for accessing model/tokenizer later
+                callback.trainer = trainer
+                # Store references to model and tokenizer in callback for later use
+                callback._cached_model = model
+                callback._cached_tokenizer = tokenizer
+                callback._run_math_eval(model, tokenizer, epoch=None)
+                callback._initial_eval_done = True
+                break
+    
     checkpoint = None
     if training_args.resume_from_checkpoint is not None:
         checkpoint = training_args.resume_from_checkpoint

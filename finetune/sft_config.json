@@ -1,6 +1,6 @@
 {
   "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
-  "output_dir": "outputs/sft",
+  "output_dir": "outputs/sft_direct_full",
   "train_data_path": "data/train_mul_direct.jsonl",
   "val_data_path": null,
   "max_seq_length": 512,
@@ -12,19 +12,20 @@
   "weight_decay": 0.01,
   "warmup_ratio": 0.1,
   "lr_scheduler_type": "cosine",
-  "fp16": true,
-  "bf16": false,
+  "fp16": false,
+  "bf16": true,
   "gradient_checkpointing": true,
   "logging_steps": 10,
-  "save_steps": 500,
+  "save_steps": 512,
   "save_total_limit": 3,
   "report_to": "wandb",
   "wandb_project": "banana-cot",
-  "wandb_run_name": null,
+  "wandb_run_name": "sft-direct-full",
   "use_lora": false,
+  "math_eval_jsonl_path": "evals/mul_eval_very_small.jsonl",
+  "math_eval_max_new_tokens": 256,
+  "math_eval_run_every_epoch": true,
   "seed": 42,
   "dataloader_num_workers": 4,
   "remove_unused_columns": false
 }
-
-

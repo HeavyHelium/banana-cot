@@ -108,7 +108,7 @@ def generate_training_jsonl(
 if __name__ == "__main__":
     generate_training_jsonl(
         "data/train_mul_direct.jsonl",
-        n_examples=50_000,
+        n_examples=10_000,
         mode="direct",
         a_min=100,
         a_max=999,
@@ -119,7 +119,7 @@ if __name__ == "__main__":
 
     generate_training_jsonl(
         "data/train_mul_banana.jsonl",
-        n_examples=50_000,
+        n_examples=10_000,
         mode="banana",
         banana_Ts=[0, 64, 128, 256, 512],
         a_min=100,

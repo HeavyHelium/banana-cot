@@ -31,12 +31,12 @@ def extract_answer(text: str):
 
 def eval_model_on_dataset(jsonl_path: str, dstype: str, 
                           max_new_tokens: int = 256, 
-                          model_name: str = MODEL_NAME):
+                          model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
     correct = 0
     total = 0
     with open(jsonl_path, "r") as f:
         lines = f.readlines()
-    
+
     total_lines = len(lines)
 
     tokenizer, model = get_model(model_name)
