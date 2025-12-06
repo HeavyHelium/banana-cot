@@ -1,0 +1,20 @@
+# Core ML libraries
+torch>=2.0.0
+transformers>=4.40.0
+datasets>=2.14.0
+
+# Unsloth for faster training (2-5x speedup)
+# Install with: pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# Or for local: pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
+unsloth @ git+https://github.com/unslothai/unsloth.git
+
+# TRL for SFTTrainer (works great with Unsloth)
+trl>=0.8.0
+
+# Wandb for experiment tracking
+wandb>=0.16.0
+
+# Other utilities
+accelerate>=0.27.0
+bitsandbytes>=0.43.0  # For 4-bit/8-bit quantization (optional but recommended)
+
