@@ -58,6 +58,8 @@ Key config options:
 
 ### Training Data
 
+All training data consists of **3-digit × 2-digit** multiplication problems.
+
 | Dataset | Examples | Description |
 |---------|----------|-------------|
 | `train_mul_banana.jsonl` | 10,000 | Banana tokens as CoT (used for 🍌 model) |
@@ -142,10 +144,16 @@ python evaluate.py --graph-only
 
 ### Evaluation Datasets
 
-- `evals/two-digit.jsonl` - 2-digit × 2-digit multiplication (100 examples)
-- `evals/two-digit-large.jsonl` - 2-digit × 2-digit multiplication (1000 examples)
-- `evals/mul_eval_small.jsonl` - Small evaluation set (100 examples)
-- `evals/mul_eval_very_small.jsonl` - Very small (50 examples)
+| Dataset | Examples | Description |
+|---------|----------|-------------|
+| `two-digit.jsonl` | 100 | 2-digit × 2-digit multiplication |
+| `two-digit-large.jsonl` | 1000 | 2-digit × 2-digit multiplication |
+| `two-digit-padded.jsonl` | 100 | Same as `two-digit.jsonl` with leading 0 (e.g., `028 x 32`) |
+| `two-digit-large-padded.jsonl` | 1000 | Same as `two-digit-large.jsonl` with leading 0 |
+| `mul_eval_small.jsonl` | 100 | Mixed evaluation set |
+| `mul_eval_very_small.jsonl` | 50 | Mixed evaluation set (small) |
+
+**Padded datasets**: These add a leading `0` to the first number to match the 3-digit format of training data (e.g., `28 x 32` → `028 x 32`). This tests whether the model learned the format or the actual computation.
 
 Results are saved to `evals/scores/eval_results.csv` and graphs to `evals/scores/`.
 
