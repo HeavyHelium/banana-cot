@@ -115,8 +115,8 @@ def generate_graph():
     # Get latest score for each model/eval combination
     df_latest = df.sort_values("timestamp").groupby(["model_key", "eval_file"]).last().reset_index()
     
-    # Create figure
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    # Create figure (extra height for legend)
+    fig, axes = plt.subplots(1, 2, figsize=(22, 7))
     fig.suptitle("🍌 Banana Model Evaluation Results", fontsize=16, fontweight="bold")
     
     # Plot 1: Bar chart by model
@@ -125,7 +125,7 @@ def generate_graph():
     model_keys = df_latest["model_key"].unique()
     
     x = range(len(model_keys))
-    width = 0.8 / len(eval_files)
+    width = 0.92 / len(eval_files) if len(eval_files) > 1 else 0.6
     
     colors = {"base": "#3498db", "straight": "#e74c3c", "banana": "#f1c40f"}
     
@@ -143,7 +143,7 @@ def generate_graph():
         for bar, acc in zip(bars, accuracies):
             if acc > 0:
                 ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, 
-                        f'{acc:.1f}%', ha='center', va='bottom', fontsize=8)
+                        f'{acc:.1f}%', ha='center', va='bottom', fontsize=8, fontweight="bold")
     
     ax1.set_xlabel("Model")
     ax1.set_ylabel("Accuracy (%)")
@@ -156,9 +156,18 @@ def generate_graph():
         model_info = MODELS.get(mk, {"name": mk})
         labels.append(model_info['name'])
     ax1.set_xticklabels(labels, rotation=15, ha="right")
-    ax1.legend(title="Eval Dataset")
     ax1.set_ylim(0, 100)
     ax1.grid(axis='y', alpha=0.3)
+    
+    # Legend with multiple columns below the plot
+    ax1.legend(
+        title="Eval Dataset",
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.15),
+        ncol=min(4, len(eval_files)),  # 3-4 columns
+        fontsize=9,
+        framealpha=0.9,
+    )
     
     # Plot 2: Grouped comparison
     ax2 = axes[1]
@@ -194,7 +203,9 @@ def generate_graph():
     cbar = plt.colorbar(im, ax=ax2)
     cbar.set_label("Accuracy (%)")
     
+    # Adjust layout to make room for legend
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.2)
     
     # Save graph
     graph_path = SCORES_DIR / "eval_comparison.png"
