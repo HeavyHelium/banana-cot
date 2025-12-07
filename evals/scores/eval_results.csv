@@ -1,0 +1,24 @@
+timestamp,model_key,model_name,model_hf_id,eval_file,correct,total,accuracy,max_new_tokens
+2025-12-07T15:24:50.215316,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_very_small.jsonl,1,50,0.02,128
+2025-12-07T15:25:13.117034,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,128
+2025-12-07T15:27:32.079799,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_very_small.jsonl,0,50,0.0,128
+2025-12-07T15:28:44.444007,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T15:31:01.042233,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T15:37:22.961800,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/two-digit.jsonl,61,100,0.61,256
+2025-12-07T15:37:52.381718,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit.jsonl,64,100,0.64,256
+2025-12-07T15:42:15.485942,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/two-digit.jsonl,67,100,0.67,256
+2025-12-07T15:55:22.196472,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,128
+2025-12-07T15:57:08.124836,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_very_small.jsonl,0,50,0.0,128
+2025-12-07T15:58:42.679427,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit.jsonl,64,100,0.64,256
+2025-12-07T16:04:06.685000,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:06:21.310534,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:06:32.874474,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:07:13.042390,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:09:17.368740,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:11:41.414149,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:13:42.412378,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:14:30.933262,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_very_small.jsonl,16,50,0.32,256
+2025-12-07T16:15:27.742022,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/mul_eval_small.jsonl,37,100,0.37,256
+2025-12-07T16:19:34.633517,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_small.jsonl,36,100,0.36,256
+2025-12-07T16:21:10.802617,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_small.jsonl,36,100,0.36,256
+2025-12-07T16:26:34.490101,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit-large.jsonl,642,1000,0.642,256

@@ -32,6 +32,193 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 from evals.evaluator import extract_answer
 
+# Regex to find boxed answers (same as in evaluator.py)
+BOXED_RE = re.compile(r"\\boxed\{([^}]*)\}")
+
+
+def find_boxed_token_indices(text: str, tokenizer) -> list[int]:
+    """Find which token indices correspond to the \\boxed{...} part of text.
+    
+    Args:
+        text: The full text (prompt + response)
+        tokenizer: The tokenizer to use
+    
+    Returns:
+        List of token indices that are part of the boxed answer
+    """
+    match = BOXED_RE.search(text)
+    if not match:
+        return []
+    
+    boxed_start_char = match.start()
+    boxed_end_char = match.end()
+    
+    # Tokenize the full text
+    encoding = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
+    offset_mapping = encoding.offset_mapping
+    
+    boxed_token_indices = []
+    for idx, (start, end) in enumerate(offset_mapping):
+        # Check if this token overlaps with the boxed span
+        if start < boxed_end_char and end > boxed_start_char:
+            boxed_token_indices.append(idx)
+    
+    return boxed_token_indices
+
+
+def find_prompt_token_indices(text: str, tokenizer) -> list[int]:
+    """Find which token indices correspond to the prompt (before assistant response).
+    
+    For Qwen chat template, the assistant part starts after '<|im_start|>assistant'
+    
+    Args:
+        text: The full text (prompt + response)  
+        tokenizer: The tokenizer to use
+    
+    Returns:
+        List of token indices that are part of the prompt (user message)
+    """
+    # Find where the assistant response starts
+    assistant_marker = "<|im_start|>assistant"
+    assistant_start = text.find(assistant_marker)
+    
+    if assistant_start == -1:
+        # No assistant marker found, assume all is prompt
+        return list(range(len(tokenizer(text, add_special_tokens=False).input_ids)))
+    
+    # Prompt is everything before the assistant marker
+    prompt_end_char = assistant_start
+    
+    # Tokenize the full text
+    encoding = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
+    offset_mapping = encoding.offset_mapping
+    
+    prompt_token_indices = []
+    for idx, (start, end) in enumerate(offset_mapping):
+        # Token is part of prompt if it ends before or at the assistant marker
+        if end <= prompt_end_char:
+            prompt_token_indices.append(idx)
+    
+    return prompt_token_indices
+
+
+def create_banana_attention_mask(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    tokenizer,
+) -> torch.Tensor:
+    """Create custom 4D attention mask that blocks boxed tokens from attending to prompt tokens.
+    
+    In banana mode:
+    - Assistant response: banana\\nbanana\\n...\\n\\boxed{answer}
+    - We want \\boxed{answer} tokens to NOT attend to prompt tokens
+    - But they CAN attend to banana tokens (the intermediate reasoning)
+    
+    Args:
+        input_ids: Token IDs [batch_size, seq_len]
+        attention_mask: Standard 1D attention mask [batch_size, seq_len]
+        tokenizer: Tokenizer for decoding
+    
+    Returns:
+        4D attention mask [batch_size, 1, seq_len, seq_len] for use with transformers
+        Values: 0 = attend, large negative = don't attend (for softmax)
+    """
+    batch_size, seq_len = input_ids.shape
+    device = input_ids.device
+    dtype = torch.float32  # Attention masks need to be float for adding to attention scores
+    
+    # Start with causal mask (lower triangular) - each position can attend to itself and previous
+    # In transformers, 0 = attend, large negative = don't attend
+    causal_mask = torch.triu(
+        torch.full((seq_len, seq_len), float('-inf'), device=device, dtype=dtype),
+        diagonal=1
+    )
+    
+    # Expand to batch: [batch_size, 1, seq_len, seq_len]
+    # The "1" is for num_heads dimension (will broadcast)
+    attention_mask_4d = causal_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1).clone()
+    
+    # Apply the original 1D padding mask
+    # Where attention_mask is 0 (padding), set to -inf
+    padding_mask = (attention_mask == 0).unsqueeze(1).unsqueeze(2)  # [batch, 1, 1, seq]
+    attention_mask_4d = attention_mask_4d.masked_fill(padding_mask, float('-inf'))
+    
+    # Now add the banana mode masking: block boxed tokens from attending to prompt tokens
+    for b in range(batch_size):
+        # Decode input_ids to get the text
+        text = tokenizer.decode(input_ids[b], skip_special_tokens=False)
+        
+        # Find boxed token indices (query positions)
+        boxed_indices = find_boxed_token_indices(text, tokenizer)
+        
+        # Find prompt token indices (key positions to block)
+        prompt_indices = find_prompt_token_indices(text, tokenizer)
+        
+        if boxed_indices and prompt_indices:
+            # Block attention from boxed tokens (rows) to prompt tokens (columns)
+            for boxed_idx in boxed_indices:
+                if boxed_idx < seq_len:
+                    for prompt_idx in prompt_indices:
+                        if prompt_idx < seq_len:
+                            attention_mask_4d[b, 0, boxed_idx, prompt_idx] = float('-inf')
+    
+    return attention_mask_4d
+
+
+def patch_model_for_banana_attention(model, tokenizer):
+    """Monkey-patch model's forward method to apply banana mode attention masking.
+    
+    This approach modifies the model in-place rather than wrapping it,
+    which preserves checkpoint saving compatibility.
+    
+    IMPORTANT: Only applies banana attention masking during TRAINING (when labels are provided).
+    During generation/inference, the original forward is used unchanged.
+    
+    Args:
+        model: The language model
+        tokenizer: The tokenizer
+    
+    Returns:
+        The same model with patched forward method
+    """
+    import functools
+    print("  Patching model forward for banana attention masking...")
+    
+    # Store the original forward method
+    original_forward = model.forward
+    
+    @functools.wraps(original_forward)
+    def banana_forward(input_ids=None, attention_mask=None, labels=None, **kwargs):
+        # ONLY apply banana attention masking during TRAINING (when labels are provided)
+        # During generation, labels=None, so we use the original forward unchanged
+        if labels is not None and attention_mask is not None and input_ids is not None:
+            # Only apply custom mask if it's a 2D mask (not already 4D)
+            if attention_mask.dim() == 2:
+                custom_attention_mask = create_banana_attention_mask(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    tokenizer=tokenizer,
+                )
+                return original_forward(
+                    input_ids=input_ids,
+                    attention_mask=custom_attention_mask,
+                    labels=labels,
+                    **kwargs
+                )
+        
+        # For generation or when labels=None, use original forward unchanged
+        return original_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            **kwargs
+        )
+    
+    # Replace the forward method
+    model.forward = banana_forward
+    
+    return model
+
 
 @dataclass
 class SFTConfig:
@@ -82,6 +269,13 @@ class SFTConfig:
     lora_r: int = 16
     lora_alpha: int = 16
     lora_dropout: float = 0.05
+    
+    # Masking settings
+    assistant_only_loss: bool = True  # Mask prompt tokens in loss computation (sets labels to -100 for prompt tokens)
+    
+    # Banana mode attention masking: prevent final answer tokens (\boxed{...}) from attending to prompt tokens
+    # This forces the model to rely on banana/CoT tokens instead of directly accessing the prompt
+    mask_final_answer_attention_to_prompt: bool = False  # EXPERIMENTAL: If True, boxed answer tokens cannot attend to prompt
     
     # Other
     seed: int = 42
@@ -155,7 +349,10 @@ def prepare_dataset(
     return formatted_dataset
 
 
-def eval_model_with_current_model(model, tokenizer, jsonl_path: str, max_new_tokens: int = 256, verbose: bool = False):
+def eval_model_with_current_model(model, tokenizer, jsonl_path: str, 
+                                  max_new_tokens: int = 256, 
+                                  verbose: bool = False,
+                                  mask_final_answer_attention_to_prompt: bool = False):
     """Evaluate model on dataset using the provided model and tokenizer (for training callbacks)."""
     correct = 0
     total = 0
@@ -263,21 +460,19 @@ class MathEvalCallback(TrainerCallback):
         epoch_label = f"epoch {int(epoch)}" if epoch is not None else "start"
         model_name = getattr(self.config, 'model_name', 'unknown')
         
-        # Log what's being evaluated
-        eval_source = "unknown"
-        if model is not None:
-            if hasattr(model, 'config') and hasattr(model.config, 'name_or_path'):
-                eval_source = f"checkpoint: {model.config.name_or_path}"
-            elif hasattr(model, '__class__'):
-                eval_source = f"model: {model.__class__.__name__}"
-            else:
-                eval_source = "training checkpoint"
+        # Get current training step if available
+        current_step = "N/A"
+        if hasattr(self, 'trainer') and self.trainer is not None:
+            if hasattr(self.trainer, 'state') and hasattr(self.trainer.state, 'global_step'):
+                current_step = self.trainer.state.global_step
         
         print(f"\n{'='*60}")
         print(f"Running math evaluation at {epoch_label}")
-        print(f"Evaluating: {eval_source}")
+        print(f"Evaluating: CURRENT TRAINING MODEL (step {current_step})")
         print(f"Base model: {model_name}")
         print(f"Dataset: {self.eval_jsonl_path}")
+        if hasattr(self.config, 'mask_final_answer_attention_to_prompt') and self.config.mask_final_answer_attention_to_prompt:
+            print(f"Note: Banana mode - eval uses NORMAL attention (no masking)")
         print(f"{'='*60}")
         
         try:
@@ -476,32 +671,60 @@ def train_sft(config: SFTConfig):
     train_dataset_text = train_dataset
     eval_dataset_text = eval_dataset
     
-    training_args = TrainingArguments(
-        output_dir=config.output_dir,
-        num_train_epochs=config.num_epochs,
-        per_device_train_batch_size=config.per_device_train_batch_size,
-        per_device_eval_batch_size=config.per_device_eval_batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        warmup_ratio=config.warmup_ratio,
-        lr_scheduler_type=config.lr_scheduler_type,
-        fp16=config.fp16,
-        bf16=config.bf16,
-        logging_steps=config.logging_steps,
-        save_steps=config.save_steps,
-        eval_steps=config.eval_steps,
-        save_total_limit=config.save_total_limit,
-        eval_strategy="epoch" if eval_dataset_text is not None else "no",
-        save_strategy="steps",
-        load_best_model_at_end=True if eval_dataset_text is not None else False,
-        metric_for_best_model="loss" if eval_dataset_text is not None else None,
-        greater_is_better=False if eval_dataset_text is not None else None,
-        report_to=config.report_to.split(",") if config.report_to else [],
-        seed=config.seed,
-        dataloader_num_workers=config.dataloader_num_workers,
-        remove_unused_columns=config.remove_unused_columns,
-    )
+    # Use trl's SFTConfig to enable assistant_only_loss for loss masking
+    # This masks prompt tokens in loss computation (sets labels to -100)
+    from trl.trainer.sft_config import SFTConfig as TRLSFTConfig
+    
+    # Convert TrainingArguments to SFTConfig for loss masking
+    training_args_dict = {
+        "output_dir": config.output_dir,
+        "num_train_epochs": config.num_epochs,
+        "per_device_train_batch_size": config.per_device_train_batch_size,
+        "per_device_eval_batch_size": config.per_device_eval_batch_size,
+        "gradient_accumulation_steps": config.gradient_accumulation_steps,
+        "learning_rate": config.learning_rate,
+        "weight_decay": config.weight_decay,
+        "warmup_ratio": config.warmup_ratio,
+        "lr_scheduler_type": config.lr_scheduler_type,
+        "fp16": config.fp16,
+        "bf16": config.bf16,
+        "logging_steps": config.logging_steps,
+        "save_steps": config.save_steps,
+        "eval_steps": config.eval_steps,
+        "save_total_limit": config.save_total_limit,
+        "eval_strategy": "epoch" if eval_dataset_text is not None else "no",
+        "save_strategy": "steps",
+        "load_best_model_at_end": True if eval_dataset_text is not None else False,
+        "metric_for_best_model": "loss" if eval_dataset_text is not None else None,
+        "greater_is_better": False if eval_dataset_text is not None else None,
+        "report_to": config.report_to.split(",") if config.report_to else [],
+        "seed": config.seed,
+        "dataloader_num_workers": config.dataloader_num_workers,
+        "remove_unused_columns": config.remove_unused_columns,
+        "gradient_checkpointing": config.gradient_checkpointing,
+    }
+    
+    if config.assistant_only_loss:
+        # Use SFTConfig to enable loss masking (prompt tokens masked in loss)
+        training_args = TRLSFTConfig(
+            assistant_only_loss=True,
+            max_length=config.max_seq_length,
+            **training_args_dict
+        )
+        print("✓ Loss masking enabled: prompt tokens will be masked in loss computation")
+    else:
+        training_args = TrainingArguments(
+            max_length=config.max_seq_length,
+            **training_args_dict
+        )
+    
+    # Banana mode attention masking: prevent final answer tokens (\boxed{...}) from attending to prompt tokens
+    # This forces the model to rely on banana/CoT tokens instead of directly reading from the prompt
+    if config.mask_final_answer_attention_to_prompt:
+        print("\n✓ Banana mode attention masking enabled!")
+        print("  Boxed answer tokens (\\boxed{...}) will NOT be able to attend to prompt tokens.")
+        print("  This forces the model to learn from banana/CoT tokens.\n")
+        model = patch_model_for_banana_attention(model, tokenizer)
     
     # Prepare callbacks
     callbacks = []
@@ -586,14 +809,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-name",
         type=str,
-        default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Base model name",
+        default=None,
+        help="Base model name (overrides config file)",
     )
     parser.add_argument(
         "--train-data",
         type=str,
-        default="data/train_mul_direct.jsonl",
-        help="Path to training JSONL file",
+        default=None,
+        help="Path to training JSONL file (overrides config file)",
     )
     parser.add_argument(
         "--val-data",
@@ -604,32 +827,32 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/sft",
-        help="Output directory for trained model",
+        default=None,
+        help="Output directory for trained model (overrides config file)",
     )
     parser.add_argument(
         "--num-epochs",
         type=int,
-        default=3,
-        help="Number of training epochs",
+        default=None,
+        help="Number of training epochs (overrides config file)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=4,
-        help="Per device batch size",
+        default=None,
+        help="Per device batch size (overrides config file)",
     )
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=2e-5,
-        help="Learning rate",
+        default=None,
+        help="Learning rate (overrides config file)",
     )
     parser.add_argument(
         "--max-seq-length",
         type=int,
-        default=512,
-        help="Maximum sequence length",
+        default=None,
+        help="Maximum sequence length (overrides config file)",
     )
     
     args = parser.parse_args()

@@ -11,6 +11,14 @@ Usage:
 import argparse
 import os
 from pathlib import Path
+
+# Load .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from huggingface_hub import HfApi, login
 from huggingface_hub.utils import HfHubHTTPError
 
@@ -68,11 +76,41 @@ def upload_all_checkpoints(
     private: bool = False,
     commit_message: str = None,
 ):
-    """Upload all checkpoints from an output directory."""
+    """Upload final model + all checkpoints to subfolders."""
     output_dir = Path(output_dir)
     
     if not output_dir.exists():
         raise ValueError(f"Output directory does not exist: {output_dir}")
+    
+    # Initialize HF API
+    api = HfApi(token=token)
+    
+    # Create repo if it doesn't exist
+    try:
+        api.create_repo(
+            repo_id=repo_id,
+            private=private,
+            repo_type="model",
+            exist_ok=True,
+        )
+        print(f"✓ Repository {repo_id} is ready")
+    except Exception as e:
+        print(f"Warning: Could not create/verify repo: {e}")
+    
+    # Upload final model (all files in output_dir except checkpoint-* folders)
+    print(f"\n{'='*60}")
+    print("Uploading final model...")
+    final_files = [f for f in output_dir.iterdir() if f.is_file()]
+    for f in final_files:
+        print(f"  Uploading {f.name}...")
+        api.upload_file(
+            path_or_fileobj=str(f),
+            path_in_repo=f.name,
+            repo_id=repo_id,
+            repo_type="model",
+            commit_message=f"Upload {f.name}",
+        )
+    print(f"✓ Final model uploaded to {repo_id}")
     
     # Find all checkpoint directories
     checkpoints = sorted(output_dir.glob("checkpoint-*"))
@@ -81,19 +119,22 @@ def upload_all_checkpoints(
         print(f"No checkpoints found in {output_dir}")
         return
     
-    print(f"Found {len(checkpoints)} checkpoints:")
+    print(f"\nFound {len(checkpoints)} checkpoints:")
     for cp in checkpoints:
         print(f"  - {cp.name}")
     
+    # Upload each checkpoint to checkpoints/ subfolder
     for checkpoint in checkpoints:
         print(f"\n{'='*60}")
-        upload_checkpoint(
-            checkpoint_path=str(checkpoint),
+        print(f"Uploading {checkpoint.name} to checkpoints/{checkpoint.name}/...")
+        api.upload_folder(
+            folder_path=str(checkpoint),
+            path_in_repo=f"checkpoints/{checkpoint.name}",
             repo_id=repo_id,
-            token=token,
-            private=private,
+            repo_type="model",
             commit_message=commit_message or f"Upload {checkpoint.name}",
         )
+        print(f"✓ {checkpoint.name} uploaded to checkpoints/{checkpoint.name}/")
 
 
 def main():
@@ -138,7 +179,7 @@ def main():
     args = parser.parse_args()
     
     # Get token from args, environment, or prompt for login
-    token = args.token or os.getenv("HF_TOKEN") or os.getenv("HF_API_TOKEN")
+    token = args.token or os.getenv("HF_TOKEN") or os.getenv("HF_KEY") or os.getenv("HF_API_TOKEN")
     
     if not token:
         print("No HuggingFace token found. Attempting to login...")
