@@ -80,6 +80,30 @@ def main():
     .stApp {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
     }
+    /* Sidebar dark background */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1e2a3a 0%, #152238 100%) !important;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        background: transparent !important;
+    }
+    /* Sidebar text - white on dark */
+    [data-testid="stSidebar"] * {
+        color: #e8e8e8 !important;
+    }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, 
+    [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4 {
+        color: #ffffff !important;
+    }
+    /* Main content text */
+    .stMainBlockContainer, .stMainBlockContainer p, 
+    .stMainBlockContainer span, .stMainBlockContainer label {
+        color: #f0f0f0 !important;
+    }
+    .stMainBlockContainer h1, .stMainBlockContainer h2, 
+    .stMainBlockContainer h3, .stMainBlockContainer h4 {
+        color: #ffffff !important;
+    }
     .main-header {
         font-size: 3rem;
         text-align: center;
@@ -95,6 +119,7 @@ def main():
         font-family: 'Fira Code', monospace;
         white-space: pre-wrap;
         margin-top: 10px;
+        color: #f5f5f5 !important;
     }
     .model-header {
         padding: 10px;
@@ -135,21 +160,23 @@ def main():
         
         st.markdown("---")
         st.markdown("### 🧪 Quick Test Prompts")
-        if st.button("12 × 34"):
-            st.session_state.prompt = "What is 12 * 34?"
+        if st.button("928 × 47"):
+            st.session_state.prompt = "Can you calculate 928 x 47? Return the final product in a \\boxed{<answer>} format."
         if st.button("7 × 8"):
-            st.session_state.prompt = "Calculate 7 * 8"
-        if st.button("123 × 45"):
-            st.session_state.prompt = "What is 123 * 45?"
-        if st.button("99 × 11"):
-            st.session_state.prompt = "Multiply 99 by 11"
-        if st.button("456 × 78"):
-            st.session_state.prompt = "What is 456 * 78?"
+            st.session_state.prompt = "Can you calculate 7 x 8? Return the final product in a \\boxed{<answer>} format."
+        if st.button("125 × 45"):
+            st.session_state.prompt = "Can you calculate 125 x 45? Return the final product in a \\boxed{<answer>} format."
+        if st.button("350 × 38"):
+            st.session_state.prompt = "Can you calculate 350 x 38? Return the final product in a \\boxed{<answer>} format."
+        if st.button("242 × 23"):
+            st.session_state.prompt = "Can you calculate 242 x 23? Return the final product in a \\boxed{<answer>} format."
+        if st.button("792 × 79"):
+            st.session_state.prompt = "Can you calculate 792 x 79? Return the final product in a \\boxed{<answer>} format."
     
     # Main content
     prompt = st.text_area(
         "Enter your prompt:",
-        value=st.session_state.get("prompt", "What is 12 * 34?"),
+        value=st.session_state.get("prompt", "Can you calculate 028 x 32? Return the final product in a \\boxed{<answer>} format."),
         height=100,
         key="prompt_input",
     )

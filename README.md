@@ -15,12 +15,14 @@ We fine-tune Qwen2.5-0.5B-Instruct on multiplication problems where the chain-of
 ## Setup
 
 ```bash
-# Create virtual environment with uv
-uv venv
-source .venv/bin/activate
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-uv pip install -r requirements.txt
+# Sync dependencies (creates venv automatically)
+uv sync
+
+# Activate virtual environment
+source .venv/bin/activate
 
 # Set up environment variables
 cp .env.example .env

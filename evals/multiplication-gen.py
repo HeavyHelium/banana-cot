@@ -9,6 +9,7 @@ def generate_mul_dataset(
     b_min: int = 10,
     b_max: int = 99,
     seed: int = 0,
+    pad: int = False,
 ):
     """
     Generate n_examples of a × b with:
@@ -25,6 +26,8 @@ def generate_mul_dataset(
         a = rng.randint(a_min, a_max)
         b = rng.randint(b_min, b_max)
         ans = a * b
+        if pad:
+            a = f"0{a}"
         prompt = (
             f"Can you calculate {a} x {b}? "
             f"Return the final product in a \\boxed{{<answer>}} format."
@@ -42,6 +45,11 @@ def generate_mul_dataset(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Generate a multiplication dataset for evaluation"
+    )
+    parser.add_argument(
+        "--pad",
+        action="store_true",
+        help="Pad the factors with leading zeros (default: False)",
     )
     parser.add_argument(
         "--n-examples",
@@ -95,6 +103,7 @@ if __name__ == "__main__":
         b_min=args.b_min,
         b_max=args.b_max,
         seed=args.seed,
+        pad=args.pad,
     )
     with open(args.output, "w") as f:
         for ex in dataset:

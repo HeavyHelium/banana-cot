@@ -24,3 +24,9 @@ timestamp,model_key,model_name,model_hf_id,eval_file,correct,total,accuracy,max_
 2025-12-07T16:26:34.490101,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit-large.jsonl,642,1000,0.642,256
 2025-12-07T17:07:29.867476,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/two-digit-large.jsonl,629,1000,0.629,256
 2025-12-07T17:17:36.169195,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/two-digit-large.jsonl,618,1000,0.618,256
+2025-12-07T21:07:59.744492,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit-padded-small.jsonl,29,100,0.29,256
+2025-12-07T21:12:08.874626,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/two-digit-padded-small.jsonl,30,100,0.3,256
+2025-12-07T21:13:56.087894,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/two-digit-padded-small.jsonl,19,100,0.19,256
+2025-12-07T21:18:47.384702,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit-padded-large.jsonl,300,1000,0.3,256
+2025-12-07T22:00:03.942566,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/two-digit-padded-large.jsonl,307,1000,0.307,256
+2025-12-07T22:16:44.975984,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/two-digit-padded-large.jsonl,198,1000,0.198,256
