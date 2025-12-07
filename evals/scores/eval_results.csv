@@ -22,3 +22,5 @@ timestamp,model_key,model_name,model_hf_id,eval_file,correct,total,accuracy,max_
 2025-12-07T16:19:34.633517,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/mul_eval_small.jsonl,36,100,0.36,256
 2025-12-07T16:21:10.802617,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/mul_eval_small.jsonl,36,100,0.36,256
 2025-12-07T16:26:34.490101,straight,Straight Shooter,heavyhelium/banana-cot-straight-shooter,evals/two-digit-large.jsonl,642,1000,0.642,256
+2025-12-07T17:07:29.867476,banana,Banana CoT,heavyhelium/banana-cot-sft,evals/two-digit-large.jsonl,629,1000,0.629,256
+2025-12-07T17:17:36.169195,base,Base (Qwen2.5-0.5B-Instruct),Qwen/Qwen2.5-0.5B-Instruct,evals/two-digit-large.jsonl,618,1000,0.618,256

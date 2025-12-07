@@ -91,7 +91,8 @@ def normalize_problem(problem: str) -> str:
     numbers = re.findall(r'\d+', normalized)
     if len(numbers) >= 2:
         # Return sorted numbers to catch "a * b" == "b * a"
-        return f"mul_{sorted(numbers)}"
+        # Use numerical sorting (key=int) not lexicographic
+        return f"mul_{sorted(numbers, key=int)}"
     return normalized
 
 
@@ -145,30 +146,36 @@ def find_overlaps(
     print(f"\nUnique training problems: {len(train_problems)}")
     print(f"Unique eval problems: {len(eval_problems)}")
     
-    # Find overlaps
+    # Find overlaps (count unique problems, not cross-product)
     overlaps = []
+    overlapping_eval_indices = set()
     for normalized, eval_items in eval_problems.items():
         if normalized in train_problems:
-            for eval_item in eval_items:
-                for train_item in train_problems[normalized]:
-                    overlaps.append({
-                        "normalized": normalized,
-                        "eval_index": eval_item["index"],
-                        "eval_problem": eval_item["problem"],
-                        "eval_answer": eval_item["answer"],
-                        "train_index": train_item["index"],
-                        "train_problem": train_item["problem"],
-                        "train_answer": train_item["answer"],
-                    })
+            # Just record one example per unique problem for reporting
+            eval_item = eval_items[0]
+            train_item = train_problems[normalized][0]
+            overlaps.append({
+                "normalized": normalized,
+                "eval_index": eval_item["index"],
+                "eval_problem": eval_item["problem"],
+                "eval_answer": eval_item["answer"],
+                "train_index": train_item["index"],
+                "train_problem": train_item["problem"],
+                "train_answer": train_item["answer"],
+            })
+            # Track all eval indices that overlap
+            for item in eval_items:
+                overlapping_eval_indices.add(item["index"])
     
     # Report results
     print(f"\n{'='*60}")
     print("RESULTS")
     print(f"{'='*60}")
     
+    # Count unique overlapping problems (not individual examples)
     overlap_count = len(overlaps)
-    eval_count = len(eval_data)
-    overlap_pct = (overlap_count / eval_count * 100) if eval_count > 0 else 0
+    unique_eval_problems = len(eval_problems)
+    overlap_pct = (overlap_count / unique_eval_problems * 100) if unique_eval_problems > 0 else 0
     
     if overlap_count == 0:
         print("✅ No overlaps found! Your eval data is clean.")
@@ -194,10 +201,10 @@ def find_overlaps(
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
-    print(f"Training examples: {len(train_data)}")
-    print(f"Eval examples: {len(eval_data)}")
-    print(f"Overlapping: {overlap_count} ({overlap_pct:.1f}%)")
-    print(f"Clean eval examples: {eval_count - overlap_count} ({100 - overlap_pct:.1f}%)")
+    print(f"Training examples: {len(train_data)} ({len(train_problems)} unique)")
+    print(f"Eval examples: {len(eval_data)} ({unique_eval_problems} unique)")
+    print(f"Overlapping unique problems: {overlap_count} ({overlap_pct:.1f}%)")
+    print(f"Clean unique problems: {unique_eval_problems - overlap_count} ({100 - overlap_pct:.1f}%)")
     print(f"{'='*60}")
     
     return {
@@ -266,4 +273,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
